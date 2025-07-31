@@ -1,7 +1,7 @@
 
 # Ariel Data Challenge 2025
 
-> **A production-ready baseline pipeline for exoplanet atmospheric analysis using ESA's Ariel Space Mission simulated data**
+> **A baseline pipeline for exoplanet atmospheric analysis using ESA's Ariel Space Mission simulated data**
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
