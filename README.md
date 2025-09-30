@@ -1,187 +1,121 @@
+# Ariel Conformer: Mu Prediction from AIRS + FGS
 
-# Ariel Data Challenge 2025
+This repository contains a full preprocessing and modeling pipeline to predict the exoplanet transmission spectrum µ across 283 wavelengths by fusing AIRS and FGS sensor streams from the Ariel Data Challenge format. It includes robust dataset cleaning, temporal downsampling, feature tokenization, a Conformer-based encoder, and Lightning training/evaluation utilities.
 
-> **A baseline pipeline for exoplanet atmospheric analysis using ESA's Ariel Space Mission simulated data**
+### Key features
+- End-to-end data pipeline: calibration, CDS computation, hot/dead masking, linearity correction, flat-fielding, and robust temporal binning for both sensors.
+- Sensor fusion: learns from AIRS (spectral) and FGS (photometric) streams with sensor-type embeddings and shared self-attention.
+- Conformer encoder: macaron-style feedforward, depthwise conv blocks, and query-based wavelength head to produce µ for 283 bins.
+- Reproducible training with PyTorch Lightning, mixed precision, checkpoints, and TensorBoard logging.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Kaggle Competition](https://img.shields.io/badge/Kaggle-Ariel%20Data%20Challenge%202025-20BEFF.svg)](https://www.kaggle.com/competitions/ariel-data-challenge-2025)
+### Repository structure
+- neurips-ariel-conformer.ipynb — main notebook with data processing, dataset/dataloader modules, model, Lightning loop, and prediction scripts.
+- processed_data/ — generated arrays and artifacts, including per-observation tensors and transit_depth.csv.
+- checkpoints/ — model checkpoints produced by the Trainer callbacks.
+- predictions/ — saved µ predictions as CSV.
+- data/ — expected input directory with train/test parquet files and CSV metadata.
 
-## Overview
+## Data expectations
 
-This repository contains a complete **baseline solution** for the [Ariel Data Challenge 2025](https://www.kaggle.com/competitions/ariel-data-challenge-2025) - a cutting-edge competition focused on extracting atmospheric composition from exoplanet transit spectroscopy data.
+Place the official Ariel Data Challenge structure in ./data. The notebook expects:
+- ./data/adc_info.csv
+- ./data/train.csv (target spectra per planet_id for training)
+- ./data/train_star_info.csv and ./data/test_star_info.csv (8 star parameters per planet_id)
+- ./data/wavelengths.csv (optional; otherwise a default 283-length linspace is used)
+- ./data/sigma_estimates.csv (optional; provides per-sensor sigma priors)
+- For each planet_id and obs_id in train/ or test/: AIRS-CH0_signal_{obs_id}.parquet, FGS1_signal_{obs_id}.parquet, and corresponding calibration parquet files under AIRS-CH0_calibration_{obs_id}/ and FGS1_calibration_{obs_id}/ with dark, dead, flat, linear_corr matrices.
 
-The pipeline processes raw infrared detector data from the simulated **AIRS (Atmospheric Infrared Spectrometer)** instrument and produces high-quality transmission spectra that reveal the atmospheric properties of distant worlds.
+Directory sketch:
+- data/
+  - train/planet_id/AIRS-CH0_signal_0.parquet, FGS1_signal_0.parquet, AIRS-CH0_calibration_0/*.parquet, FGS1_calibration_0/*.parquet
+  - test/planet_id/... similarly arranged for inference
 
-## Key Features
+## Installation
 
-### Advanced Calibration Pipeline
-- **Correlated Double Sampling (CDS)**: Eliminates instrumental drift and low-frequency noise
-- **Hot/Dead Pixel Masking**: Statistical detection using sigma-clipping with outlier rejection
-- **Flat-field Correction**: Pixel-to-pixel sensitivity normalization
-- **Intelligent Temporal Binning**: SNR optimization through adaptive frame averaging
+Use Python 3.10+ and install dependencies:
+- pip install -r requirements.txt
+- For GPU builds of torch/torchvision/torchaudio, use the official PyTorch index URL (e.g., cu121) if needed.
 
-### Robust Detrending System
-- **Two-pass Detrending Architecture**: 
-  - **Pass 1**: Linear trend removal with sigma-clipped masking
-  - **Pass 2**: Polynomial refinement on pre-normalized data
-- **KMeans-based Transit Detection**: Automatic separation of in/out-of-transit data
-- **Spectral Channel Optimization**: Simplified robust processing for noisy wavelength bins
+Required packages include numpy, pandas, scipy, astropy, pyarrow/fastparquet, tqdm, torch, torchvision, torchaudio, pytorch-lightning, tensorboard, typing-extensions, and ipywidgets. Optional: wandb for logging. See requirements.txt.
 
-### Scientific Analysis Tools
-- **Transmission Spectroscopy**: Wavelength-dependent transit depth extraction
-- **Spectral Binning**: Professional mapping from 356 detector columns → 283 standardized bins
-- **Statistical Error Analysis**: Plateau scatter-based uncertainty estimation
-- **Publication-Quality Output**: Normalized light curves ready for scientific interpretation
+## Quickstart
 
-## Pipeline Architecture
+Open neurips-ariel-conformer.ipynb and run the cells in order. The main configuration block controls paths and parameters:
+- DATA_PATH: base dataset directory (default ./data)
+- OUTPUT_DIR: where processed arrays and transit_depth.csv will be written (default ./processed_data)
+- IS_TRAIN: toggles train/test folders
+- SENSOR_CONFIG: shapes, binning, ROI slices, dt patterns for AIRS and FGS
+- MODEL_*: phase detection slice, polynomial degree, optimization delta, etc.
 
-```
-Raw AIRS Data → Calibration → CDS Processing → Flat-field → Temporal Binning
-     ↓
-Light Curve Extraction → Detrending → Normalization → Transit Depth Measurement
-     ↓
-Spectral Analysis → Wavelength Mapping → Transmission Spectrum → Competition CSV
-```
+### Step 1: Preprocess and compute transit depth
 
-## Quick Start
+The ArielDataProcessor performs end-to-end cleaning and downsampling, writing fused tensors and estimating per-planet transit_depth.csv for conditioning. Example (from the notebook):
+- processor = ArielDataProcessor(data_path=config["DATA_PATH"], output_path=config["OUTPUT_DIR"], is_train=config["IS_TRAIN"], n_jobs=4)
+- transit_depth = processor.process_all_data(airs_factors=160, fgs_ratio=12, mode='mean')
 
-### Installation
+Generated artifacts:
+- processed_data/planet_{planet_id}_signal_{obs_id}_downsample_{A}.npy with shape (T, 16, 283)
+- processed_data/transit_depth.csv with a single column transit_depth indexed by planet_id
 
-# Clone the repository
-```
-git clone https://github.com/guzel-hairdressers/neurips-ariel-data-challenge.git
-cd neurips-ariel-data-challenge
-```
-# Install dependencies
-```
-pip install -r requirements.txt
-```
+### Step 2: Build DataModule
 
-### Basic Usage
+The ArielDataModule wraps the dataset, splits by planet_id for leak-free validation, and exposes train/val loaders. Parameters include batch_size, num_workers, val_split, downsample_mode (e.g., "160"), pad_to_T, and seed.
 
-```
-from src.ariel_pipeline import calibrate_airs_ch0_advanced, build_spectrum
-```
-# Process single planet
-```
-processed_signal, frames = calibrate_airs_ch0_advanced(
-    signal_path='path/to/planet/AIRS-CH0_signal_0.parquet',
-    calibration_path='path/to/planet/AIRS-CH0_calibration_0',
-    bin_size=10
-)
-```
+- datamodule = ArielDataModule(preprocessed_dir=config['OUTPUT_DIR'], train_csv=config['DATA_PATH'] + '/train.csv', star_info_csv=..., wavelengths_csv=..., transit_depth_csv=..., sigma_csv=..., batch_size=4, val_split=0.2, downsample_mode="160", pad_to_T=30)
 
-# Generate transmission spectrum
-```
-spectrum_data = build_spectrum(
-    root_path='path/to/data/',
-    max_planets=1
-)
-```
+### Step 3: Train the Conformer
 
-## Core Functions
+The ArielConformerGllLightning wraps the architecture and training logic with metrics: MSE/RMSE/MAE and a GLL-style score tied to given sigma priors. Training uses AdamW, ReduceLROnPlateau, gradient clipping, mixed precision, and TensorBoard logging.[1]
 
-| Function | Description | Use Case |
-|----------|-------------|----------|
-| `calibrate_airs_ch0_advanced()` | Complete calibration with CDS + binning | Raw data → Clean signal |
-| `detrend_light_curve()` | Two-pass robust detrending | Trend removal + normalization |
-| `analyze_light_curves()` | Full analysis with visualization | Quality control + diagnostics |
-| `build_spectrum()` | Transmission spectrum extraction | Scientific analysis |
-| `calc_submission()` | Batch processing pipeline | Competition submission |
+- model, trainer = train_ariel_conformer(preprocessed_dir=config['OUTPUT_DIR'], data_dir=config['DATA_PATH'], batch_size=4, downsample_mode="160", max_epochs=150, learning_rate=5e-5, num_workers=0, accumulate_grad_batches=4, pad_to_T=30, lr_patience=5, input_scale=0.1)
 
-## Performance & Results
+Checkpoints are stored under ./checkpoints with val_rmse and val_gll in filenames. The notebook prints model summary and device info.
 
-### Output Quality
-- **Clean normalized light curves** with typical transit depths: 0.1-2.0%
-- **Transmission spectra** revealing atmospheric absorption features
-- **Competition-ready CSV** in required format (283 wavelengths + 283 uncertainties)
-- **Robust error handling** for corrupted/edge-case data
+### Step 4: Predict µ
 
-## Scientific Methodology
+For trained checkpoints, create a DataLoader over the entire training index or test set and run inference:
+- ckpts = ['./checkpoints/ariel-sensor-epoch=08-val_rmse=0.000500-val_gll=0.3594.ckpt']
+- pids, mu_np = predict_mu_for_loader(ArielConformerGllLightning.load_from_checkpoint(ckpts), loader)
+- save_mu_csv(pids, mu_np, './predictions/mu_predictions.csv')
 
-### Detector Physics
-- Proper handling of infrared detector noise characteristics
-- CDS implementation following astronomical best practices
-- Flat-field correction accounting for pixel variations
+The script aggregates duplicate planet observations by mean and saves planet_id-indexed CSV with 283 columns: lambda_0 ... lambda_282.
 
-### Statistical Rigor
-- Sigma-clipping for outlier-resistant trend identification
-- Bootstrap-ready error estimation framework
-- Physically-motivated parameter selection
+## Modeling details
 
-### Competition Strategy
-This baseline demonstrates understanding of:
-- Raw detector data processing
-- Astronomical calibration standards
-- Robust trend removal techniques
-- Scientific error analysis
-- Production-ready code architecture
+- Tokenizers: CNN tokenizers for AIRS (2D) and FGS (1D) generate token grids/strips per time step; adaptive pooling controls token counts.
+- Positional encodings: learnable time and token encodings to preserve structure after flattening to sequence.
+- Sensor embeddings: per-sensor learned biases so the encoder can disambiguate AIRS vs FGS contributions.
+- Conformer backbone: stacks of macaron feedforward, multi-head attention, and depthwise conv blocks; pre-fuse stages before the main encoder.
+- Wavelength query head: a bank of learnable query vectors attends over sequence tokens to produce per-wavelength µ.
+- Loss/metrics: training optimizes MSE; logs RMSE/MAE and a normalized Gaussian log-likelihood metric (GLL-like).
 
+## Performance notes
 
-## Technical Requirements
+- Mixed precision (precision='16-mixed') with gradient clipping improves throughput; set torch.set_float32_matmul_precision('high').
+- Increase DataLoader num_workers for speed once the pipeline is stable; persistent_workers helps for repeated epochs.
+- For larger datasets, pad_to_T allows fixed-length batches; otherwise variable-T collate remains available if custom collate is enabled.
 
-```
-python>=3.8
-pandas>=1.5.0
-numpy>=1.20.0
-matplotlib>=3.5.0
-scikit-learn>=1.0.0
-astropy>=5.0.0
-tqdm>=4.60.0
-```
+## Reproducibility
 
-## Usage Examples
+- Random seed is set in the DataModule for planet-wise splits; set seed in all relevant frameworks for strict determinism if required.
+- Checkpoints include hyperparameters via Lightning’s save_hyperparameters and can be restored with load_from_checkpoint.
 
-### Single Planet Analysis
-```
-# Analyze one planet with full visualization
-analyze_light_curves(
-    root_path='/path/to/train/',
-    max_planets=1,
-    bin_size=10
-)
-```
+## Outputs
 
-### Batch Processing
-# Generate competition submission
-```
-calc_submission(
-    root_path='/path/to/test/',
-    list_planets=test_planet_ids,
-    wavelengths_csv='wavelengths.csv',
-    axis_info_parquet='axis_info.parquet',
-    out_csv='baseline_submission.csv'
-)
-```
+- processed_data/planet_..._downsample_*.npy arrays for training/inference.
+- processed_data/transit_depth.csv used as a conditioning feature.
+- predictions/mu_predictions.csv with predicted spectra per planet.
+- logs/ariel_conformer/ for TensorBoard scalars.
 
-## Competition Performance
+## Troubleshooting
 
-This baseline solution provides:
-- **Solid foundation** for advanced ML approaches
-- **Competitive scores** through physics-based processing
-- **Robust handling** of real-world data challenges
-- **Scalable architecture** for parameter optimization
+- Shape mismatches: verify AIRS ROI slices [8:24, 39:321] and downsample factors; ensure AIRS factor × 12 ≈ FGS factor to align timing.
+- Empty CDS: indicates too few frames; check signal parquet integrity and dt patterns.
+- NaNs after calibration: sanitize with np.nan_to_num and confirm linear_corr, flat, dark, dead shapes per sensor.
+- GPU issues: if FlashAttention warnings appear, it’s informational; the model runs with standard attention. Use appropriate CUDA wheels for torch.
 
-## License
+## Citation and license
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This code is intended for research use with Ariel Data Challenge format datasets. Please cite the Ariel competition/dataset where appropriate and respect their data licensing terms.
 
-## Contributing
-
-Feel free to:
-- Report bugs or issues
-- Suggest improvements
-- Submit pull requests
-- Star the repository if you find it useful!
-
-## Links
-
-- [Ariel Data Challenge 2025](https://www.kaggle.com/competitions/ariel-data-challenge-2025)
-- [ESA Ariel Mission](https://www.cosmos.esa.int/web/ariel)
-- [Competition Discussion Forum](https://www.kaggle.com/competitions/ariel-data-challenge-2025/discussion)
-
----
-
-**Built for the Ariel Data Challenge 2025** | *Extracting secrets from distant worlds, one photon at a time* 
-```
+Contributions via issues and pull requests are welcome.
