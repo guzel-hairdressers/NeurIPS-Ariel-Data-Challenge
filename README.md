@@ -2,7 +2,7 @@
 
 This repository contains a full preprocessing and modeling pipeline to predict the exoplanet transmission spectrum µ across 283 wavelengths by fusing AIRS and FGS sensor streams from the Ariel Data Challenge format. It includes robust dataset cleaning, temporal downsampling, feature tokenization, a Conformer-based encoder, and Lightning training/evaluation utilities.
 
-Conformer model (neurips-ariel-conformer.ipynb) achieves the GLL score of 0.411, comparable to other silver medal models (late submission).  Secondary model (MLP, neurips-ariel-transit.ipynb) achieves the GLL score of 0.375 (104/861 place)
+Conformer model (neurips-ariel-conformer.ipynb) achieves the GLL score of 0.411, comparable to other bronze medal models (late submission).  Secondary model (MLP, neurips-ariel-transit.ipynb) achieves the GLL score of 0.375 (104/861 place)
 
 ### Key features
 - End-to-end data pipeline: calibration, CDS computation, hot/dead masking, linearity correction, flat-fielding, and robust temporal binning for both sensors.
